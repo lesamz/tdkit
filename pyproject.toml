@@ -7,4 +7,4 @@ name = "tdkit"
 version = "0.0.1"
 description = "A toolkit for time domain astronomy"
 authors = [{name = "Luis Salazar Manzano", email = "lesamz@umich.edu"}]
-dependencies = ["numpy", "pandas", "matplotlib", "astropy"]
+dependencies = ["numpy", "pandas", "matplotlib", "astropy", "scipy"]
