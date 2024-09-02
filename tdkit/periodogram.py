@@ -36,12 +36,12 @@ class Periodogram:
         self.yarray = yarray
         self.yarray_err = yarray_err
 
-        self.get_cadence(cadence)
-        self.get_observingwindow_length()
+        self._get_cadence(cadence)
+        self._get_observingwindow_length()
 
 
 
-    def compute(self, frqlims='auto', fals=np.array([0.05])):
+    def compute(self, frqlims='auto', fals=np.array([0.05]), samples_per_peak=100):
         """
         Compute the periodogram.
 
@@ -50,19 +50,22 @@ class Periodogram:
             fals (np.ndarray, optional): False alarm levels. Defaults to np.array([0.05]).
         """
 
-        self.get_frequency_limits(frqlims)
+        self.samples_per_peak = samples_per_peak
+
+        self._get_frequency_limits(frqlims)
 
         self.ls = LombScargle(self.time, self.yarray, self.yarray_err)
 
-        self.xfrqs, self.ypower = self.ls.autopower(minimum_frequency = self.minimum_frequency, 
+        self.xfrqs, self.ypower = self.ls.autopower(samples_per_peak=self.samples_per_peak,
+                                                    minimum_frequency = self.minimum_frequency, 
                                                     maximum_frequency = self.maximum_frequency)
         self.xpers = 1 / self.xfrqs
 
-        self.faps_baluev = self.ls.false_alarm_probability(self.ypower, method='baluev')
-        self.fals_baluev = self.ls.false_alarm_level(fals, method='baluev')
+        self.faps_baluev = self.ls.false_alarm_probability(self.ypower, samples_per_peak=self.samples_per_peak, method='baluev')
+        self.fals_baluev = self.ls.false_alarm_level(fals, samples_per_peak=self.samples_per_peak, method='baluev')
 
 
-    def get_cadence(self, cadence='auto'):
+    def _get_cadence(self, cadence='auto'):
         """
         Determine the cadence of the observations.
 
@@ -70,18 +73,18 @@ class Periodogram:
             cadence (Quantity or str, optional): The cadence. Defaults to 'auto'.
         """
         if cadence == 'auto': self.cadence = np.median(np.diff(self.time.jd)) * u.d
-        elif cadence == isinstance(cadence, Quantity): self.cadence = cadence
+        elif isinstance(cadence, Quantity): self.cadence = cadence
         else: raise TypeError('cadence must be an astropy Quantity object or "auto"')
 
-    def get_observingwindow_length(self):
+    def _get_observingwindow_length(self):
         """
         Determine the length of the observing window.
         """
 
         self.ow_lenght = (self.time.jd.max() - self.time.jd.min()) * u.d
-        self.peak_err_ow = 1 / self.ow_lenght
+        self.peak_err_ow_frq = (1 / self.ow_lenght) / 2
 
-    def get_frequency_limits(self, frqlims='auto'):
+    def _get_frequency_limits(self, frqlims='auto'):
         """
         Determine the frequency limits for the periodogram.
 
@@ -106,6 +109,7 @@ class Periodogram:
         """
         if method == 'max':
             self.peak_xper, self.peak_xfrq, self.peak_y, self.peak_fap = self.find_peak_max(self.xpers, self.xfrqs, self.ypower, self.faps_baluev)
+            self.peak_err_ow_per = self.transform_peakerror_frq2per(self.peak_xper, self.peak_err_ow_frq)
 
 
     @staticmethod
@@ -130,6 +134,26 @@ class Periodogram:
         
         return peak_xper, peak_xfrq, peak_y, peak_fap
 
+    @staticmethod        
+    def transform_peakerror_frq2per(peak_xper, peak_err_ow_frq):
+        """
+        Transform peak error from frequency to period space.
+
+        Args:
+            peak_xper (Quantity): The period of the peak.
+            peak_err_ow_frq (Quantity): The half peak width in frequency space.
+
+        Returns:
+            Quantity: The half peak width in period space
+        """
+        peak_centr_per = peak_xper 
+        peak_centr_frq = 1 / peak_centr_per
+        peak_left_per = 1 / (peak_centr_frq + peak_err_ow_frq) 
+        peak_right_per = 1 / (peak_centr_frq - peak_err_ow_frq) 
+        # Uncertainty is the mean of both half peak widths
+        peak_err_ow_per = np.mean([peak_right_per.value-peak_centr_per.value, peak_centr_per.value-peak_left_per.value]) * peak_xper.unit
+        
+        return peak_err_ow_per
 
             
  
