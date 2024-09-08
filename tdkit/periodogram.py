@@ -36,12 +36,12 @@ class Periodogram:
         self.yarray = yarray
         self.yarray_err = yarray_err
 
-        self._get_cadence(cadence)
-        self._get_observingwindow_length()
+        self.cadence = self.get_cadence(self.time, cadence)
+        self.ow_length = self.get_window_length(self.time)
+        self.peak_err_ow_frq = self.get_window_error(self.ow_length)
 
 
-
-    def compute(self, frqlims='auto', fals=np.array([0.05]), samples_per_peak=100):
+    def compute(self, frqlims='auto', frqgrid='auto', fals=np.array([0.05]), samples_per_peak=100):
         """
         Compute the periodogram.
 
@@ -52,53 +52,105 @@ class Periodogram:
 
         self.samples_per_peak = samples_per_peak
 
-        self._get_frequency_limits(frqlims)
-
         self.ls = LombScargle(self.time, self.yarray, self.yarray_err)
+        
+        # Determine the frequency limits
+        if frqlims == 'auto':
+            self.minimum_frequency, self.maximum_frequency = self.get_frequency_limits(self.ow_length, self.cadence)
+        elif isinstance(frqlims, tuple):
+            if (isinstance(frqlims[0], Quantity)) and (isinstance(frqlims[1], Quantity)):
+                self.minimum_frequency = frqlims[0]
+                self.maximum_frequency = frqlims[1]
+        else: raise TypeError('frqlims must be a tuple of astropy Quantity objects or "auto"')
 
-        self.xfrqs, self.ypower = self.ls.autopower(samples_per_peak=self.samples_per_peak,
-                                                    minimum_frequency = self.minimum_frequency, 
-                                                    maximum_frequency = self.maximum_frequency)
+        # Determine the frequency grid
+        if frqgrid == 'auto':
+            # self.xfrqs = self.ls.autofrequency(samples_per_peak=samples_per_peak,
+                                            # minimum_frequency=self.minimum_frequency,
+                                            # maximum_frequency=self.maximum_frequency)
+            # print(self.xfrqs[0], self.xfrqs[-1], len(self.xfrqs))
+            self.xfrqs = self.get_frequency_grid(self.ow_length, self.minimum_frequency, self.maximum_frequency, samples_per_peak=self.samples_per_peak)
+            # print(self.xfrqs[0], self.xfrqs[-1], len(self.xfrqs))
+        elif isinstance(frqgrid, Quantity):  
+            self.xfrqs = frqgrid 
+        else: raise TypeError('frqgrid must be an astropy Quantity object or "auto"')
+
+
+        self.ypower = self.ls.power(frequency=self.xfrqs)
         self.xpers = 1 / self.xfrqs
 
-        self.faps_baluev = self.ls.false_alarm_probability(self.ypower, samples_per_peak=self.samples_per_peak, method='baluev')
-        self.fals_baluev = self.ls.false_alarm_level(fals, samples_per_peak=self.samples_per_peak, method='baluev')
+        self.faps_baluev = self.ls.false_alarm_probability(self.ypower, 
+                                                           samples_per_peak=self.samples_per_peak, 
+                                                           minimum_frequency=self.minimum_frequency,
+                                                           maximum_frequency=self.maximum_frequency,
+                                                           method='baluev')
+        self.fals_baluev = self.ls.false_alarm_level(fals, 
+                                                     samples_per_peak=self.samples_per_peak, 
+                                                     minimum_frequency=self.minimum_frequency,
+                                                     maximum_frequency=self.maximum_frequency,
+                                                     method='baluev')
 
-
-    def _get_cadence(self, cadence='auto'):
+    
+    @staticmethod
+    def get_cadence(time: Time, cadence: str = 'auto'):
         """
         Determine the cadence of the observations.
 
         Args:
             cadence (Quantity or str, optional): The cadence. Defaults to 'auto'.
         """
-        if cadence == 'auto': self.cadence = np.median(np.diff(self.time.jd)) * u.d
-        elif isinstance(cadence, Quantity): self.cadence = cadence
+        if cadence == 'auto': cadence = np.median(np.diff(time.jd)) * u.d
+        elif isinstance(cadence, Quantity): cadence = cadence
         else: raise TypeError('cadence must be an astropy Quantity object or "auto"')
 
-    def _get_observingwindow_length(self):
+        return cadence
+
+    @staticmethod
+    def get_window_length(time: Time):
         """
         Determine the length of the observing window.
         """
 
-        self.ow_lenght = (self.time.jd.max() - self.time.jd.min()) * u.d
-        self.peak_err_ow_frq = (1 / self.ow_lenght) / 2
+        ow_length = (time.jd.max() - time.jd.min()) * u.d
+        
+        return ow_length
+    
+    @staticmethod 
+    def get_window_error(window_length: Quantity):
+        """
+        Determine the error of the observing window.
+        """
+        peak_err_ow_frq = (1 / window_length) / 2
 
-    def _get_frequency_limits(self, frqlims='auto'):
+        return peak_err_ow_frq
+
+    @staticmethod
+    def get_frequency_limits(ow_length: Quantity, cadence: Quantity, frqlims='auto'):
         """
         Determine the frequency limits for the periodogram.
-
-        Args:
-            frqlims (tuple or str, optional): The frequency limits. Defaults to 'auto'.
         """
-        if frqlims == 'auto':
-            self.minimum_frequency = 1 / self.ow_lenght * 2
-            self.maximum_frequency = 1 / (2 * self.cadence)
-        elif isinstance(frqlims, tuple):
-            if (isinstance(frqlims[0], Quantity)) and (isinstance(frqlims[1], Quantity)):
-                self.minimum_frequency = frqlims[0]
-                self.maximum_frequency = frqlims[1]
-        else: raise TypeError('frqlims must be a tuple of astropy Quantity objects or "auto"')
+        minimum_frequency = 1 / ow_length * 2
+        maximum_frequency = 1 / (2 * cadence)
+
+        return minimum_frequency, maximum_frequency
+    
+    @staticmethod 
+    def get_frequency_grid(window_length: Quantity, minimum_frequency: Quantity, maximum_frequency: Quantity, samples_per_peak: float):
+
+        df = 1 / window_length / samples_per_peak
+
+        n_elements = ((maximum_frequency - minimum_frequency) / df).si
+
+        Nf = 1 + int(np.round(n_elements))
+
+        xfrqs = minimum_frequency + df * np.arange(Nf)
+
+        return xfrqs
+        
+
+    # @staticmethod
+    # def get_frequency_grid(ow_length, minimum_frequency, maximum_frequency, samples_per_peak=100):
+
 
     def find_peaks(self, method='max'):
         """
