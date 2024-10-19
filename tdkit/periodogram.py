@@ -89,6 +89,7 @@ class Periodogram:
                                                      minimum_frequency=self.minimum_frequency,
                                                      maximum_frequency=self.maximum_frequency,
                                                      method='baluev')
+        
 
     
     @staticmethod
